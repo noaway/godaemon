@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -25,15 +23,6 @@ var (
 
 //improvement http.Server
 type server struct {
-	http.Server
-	listener *listener
-	cm       *ConnectionManager
-}
-
-//用来重载net.Listener的方法
-type listener struct {
-	net.Listener
-	server *server
 }
 
 func init() {
@@ -115,13 +104,7 @@ func handleSignals() {
 		sig := <-signals
 		switch sig {
 		case syscall.SIGHUP: //重启
-			if srv != nil {
-				err = srv.fork()
-			} else { //only deamon时不支持kill -HUP,因为可能监听地址会占用
-				log.Printf("[%d] %s stopped.", os.Getpid(), appName)
-				os.Remove(pidFile)
-				os.Exit(2)
-			}
+			err = fork()
 			if err != nil {
 				log.Fatalln(err)
 			}
@@ -129,11 +112,7 @@ func handleSignals() {
 			fallthrough
 		case syscall.SIGTERM:
 			log.Printf("[%d] %s stop graceful", os.Getpid(), appName)
-			if srv != nil {
-				srv.shutdown()
-			} else {
-				log.Printf("[%d] %s stopped.", os.Getpid(), appName)
-			}
+			shutdown()
 			os.Exit(1)
 		}
 	}
@@ -188,71 +167,12 @@ func restart(pid int) {
 
 }
 
-//处理http.Server，使支持graceful stop/restart
-func Graceful(s http.Server) error {
-	os.Setenv("__GRACEFUL", "true")
-	srv = &server{
-		cm:     newConnectionManager(),
-		Server: s,
-	}
-	srv.ConnState = func(conn net.Conn, state http.ConnState) {
-		switch state {
-		case http.StateNew:
-			srv.cm.add(1)
-		case http.StateActive:
-			srv.cm.rmIdleConns(conn.LocalAddr().String())
-		case http.StateIdle:
-			srv.cm.addIdleConns(conn.LocalAddr().String(), conn)
-		case http.StateHijacked, http.StateClosed:
-			srv.cm.done()
-		}
-	}
-	l, err := srv.getListener()
-	if err == nil {
-		err = srv.Server.Serve(l)
-	}
-	return err
-}
-
-//使用addr和handler来启动一个支持graceful的服务
-func GracefulServe(addr string, handler http.Handler) error {
-	s := http.Server{
-		Addr:    addr,
-		Handler: handler,
-	}
-	return Graceful(s)
-}
-
-//获取listener
-func (this *server) getListener() (*listener, error) {
-	var l net.Listener
-	var err error
-	if os.Getenv("_GRACEFUL_RESTART") == "true" { //grace restart出来的进程，从FD FILE获取
-		f := os.NewFile(3, "")
-		l, err = net.FileListener(f)
-		syscall.Kill(syscall.Getppid(), syscall.SIGTERM) //发信号给父进程，让父进程停止服务
-	} else { //初始启动，监听addr
-		l, err = net.Listen("tcp", this.Addr)
-	}
-	if err == nil {
-		this.listener = &listener{
-			Listener: l,
-			server:   this,
-		}
-	}
-	return this.listener, err
-}
-
 //fork一个新的进程
-func (this *server) fork() error {
+func fork() error {
 	os.Setenv("_GRACEFUL_RESTART", "true")
-	lFd, err := this.listener.File()
-	if err != nil {
-		return err
-	}
 	execSpec := &syscall.ProcAttr{
 		Env:   os.Environ(),
-		Files: []uintptr{os.Stdin.Fd(), os.Stdout.Fd(), os.Stderr.Fd(), lFd},
+		Files: []uintptr{os.Stdin.Fd(), os.Stdout.Fd(), os.Stderr.Fd()},
 	}
 	pid, err := syscall.ForkExec(os.Args[0], os.Args, execSpec)
 	if err != nil {
@@ -264,9 +184,6 @@ func (this *server) fork() error {
 }
 
 //关闭服务
-func (this *server) shutdown() {
-	this.SetKeepAlivesEnabled(false)
-	this.cm.close(TimeDeadLine)
-	this.listener.Close()
+func shutdown() {
 	log.Printf("[%d] %s stopped.", os.Getpid(), appName)
 }
