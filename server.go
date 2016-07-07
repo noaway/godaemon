@@ -1,7 +1,6 @@
 package godaemon
 
 import (
-	//"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -14,23 +13,20 @@ import (
 )
 
 var (
-	TimeDeadLine = 10 * time.Second
-	srv          *server
-	appName      string
-	pidFile      string
-	pidVal       int
+	appName string
+	pidFile string
+	pidVal  int
 )
-
-//improvement http.Server
-type server struct {
-}
 
 func init() {
 	file, _ := filepath.Abs(os.Args[0])
 	appPath := filepath.Dir(file)
 	appName = filepath.Base(file)
+
 	pidFile = appPath + "/" + appName + ".pid"
 	if os.Getenv("__Daemon") != "true" { //master
+		log.Println("+++---------------+++")
+
 		cmd := "start" //缺省为start
 		if l := len(os.Args); l > 1 {
 			cmd = os.Args[l-1]
@@ -59,7 +55,7 @@ func init() {
 				syscall.Kill(pidVal, syscall.SIGTERM) //kill
 			}
 		case "-h":
-			fmt.Printf("Usage: %s start|restart|stop\n", appName)
+			fmt.Printf("Usage:\n\r %s start|restart|stop|-h\n", appName)
 		default: //其它不识别的参数
 			return //返回至调用方
 		}
